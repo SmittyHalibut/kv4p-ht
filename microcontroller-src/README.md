@@ -1,20 +1,21 @@
 ## Table of Contents
 
+- [Table of Contents](#table-of-contents)
 - [Prerequisites](#prerequisites)
-  - [Install ESP32 Drivers](#install-esp32-drivers)
+   - [Install ESP32 Drivers](#install-esp32-drivers)
 - [Option 1: Arduino IDE](#option-1-arduino-ide)
-  - [Install Arduino IDE](#install-arduino-ide)
-  - [Install ESP32 Board Support](#install-esp32-board-support)
-  - [Install Required Libraries](#install-required-libraries)
-  - [Opening the Project](#opening-the-project-arduino-ide)
-  - [Building the Project](#building-the-project-arduino-ide)
-  - [Uploading to the ESP32](#uploading-to-the-esp32-arduino-ide)
+   - [Install Arduino IDE](#install-arduino-ide)
+   - [Install ESP32 Board Support](#install-esp32-board-support)
+   - [Install Required Libraries](#install-required-libraries)
+   - [Opening the Project (Arduino IDE)](#opening-the-project-arduino-ide)
+   - [Building the Project (Arduino IDE)](#building-the-project-arduino-ide)
+   - [Uploading to the ESP32 (Arduino IDE)](#uploading-to-the-esp32-arduino-ide)
 - [Option 2: PlatformIO](#option-2-platformio)
-  - [Install PlatformIO](#install-platformio)
-  - [Opening the Project](#opening-the-project-platformio)
-  - [Building the Project](#building-the-project-platformio)
-  - [Uploading to the ESP32](#uploading-to-the-esp32-platformio)
-  - [PlatformIO Specific Notes](#platformio-specific-notes)
+   - [Install PlatformIO](#install-platformio)
+   - [Opening the Project (PlatformIO)](#opening-the-project-platformio)
+   - [Building the Project (PlatformIO)](#building-the-project-platformio)
+   - [Uploading to the ESP32 (PlatformIO)](#uploading-to-the-esp32-platformio)
+   - [PlatformIO Specific Notes](#platformio-specific-notes)
 - [Additional Notes](#additional-notes)
 
 
@@ -64,7 +65,14 @@
    - Locate the **EspSoftwareSerial** library in the search results.
    - Click the **Install** button to add the library to your Arduino environment.
 
-2. **Install DRA818:**
+2. **Install Adafruit NeoPixel:**
+   
+   - Navigate to `Sketch` > `Include Library` > `Manage Libraries`.
+   - In the **Library Manager** window, enter **"Adafruit NeoPixel"** into the search bar.
+   - Locate the **Adafruit NeoPixel** library in the search results.
+   - Click the **Install** button to add the library to your Arduino environment.
+
+3. **Install DRA818:**
    
    > **Note:** The version of the DRA818 library available through the Arduino Library Manager is currently broken. To ensure proper functionality, you need to install it manually from the official GitHub release.
 
@@ -79,9 +87,9 @@
      - Select the ZIP file and click **Open**.
      - A confirmation message should appear indicating that the library was added successfully.
 
-3. **Confirm All Libraries Are Installed:**
+4. **Confirm All Libraries Are Installed:**
    
-   - After completing the above steps, ensure that both **EspSoftwareSerial** and **DRA818** are listed under `Sketch` > `Include Library`.
+   - After completing the above steps, ensure that **EspSoftwareSerial**, **Adafruit NeoPixel**, and **DRA818** are listed under `Sketch` > `Include Library`.
    - If any libraries are missing, revisit the installation steps to ensure they were added correctly.
 
 ### Opening the Project (Arduino IDE)
