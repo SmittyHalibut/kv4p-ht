@@ -24,6 +24,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <driver/i2s.h>
 #include <driver/dac.h>
 #include <esp_task_wdt.h>
+#include <Adafruit_NeoPixel.h>
 
 const byte FIRMWARE_VER[8] = {'0', '0', '0', '0', '0', '0', '0', '9'}; // Should be 8 characters representing a zero-padded version, like 00000001.
 const byte VERSION_PREFIX[7] = {'V', 'E', 'R', 'S', 'I', 'O', 'N'}; // Must match RadioAudioService.VERSION_PREFIX in Android app.
@@ -79,10 +80,12 @@ boolean isTxCacheSatisfied = false; // Will be true when the DAC has enough cach
 #define RXD2_PIN 16
 #define TXD2_PIN 17
 #define DAC_PIN 25 // This constant not used, just here for reference. GPIO 25 is implied by use of I2S_DAC_CHANNEL_RIGHT_EN.
+#define BIAS_PIN 26 // Outputs a DC bias voltage for incoming audio.  Also for reference.
 #define ADC_PIN 34 // If this is changed, you may need to manually edit adc1_config_channel_atten() below too.
 #define PTT_PIN 18
 #define PD_PIN 19
-#define SQ_PIN 32
+//#define SQ_PIN 32
+uint8_t SQ_PIN = 32;
 
 // Built in LED
 #define LED_PIN 2
@@ -117,6 +120,36 @@ int fadeDirection = 0; // 0: no fade, 1: fade in, -1: fade out
 int attenuation = ATTENUATION_MAX; // Full volume
 bool lastSquelched = false;
 
+#ifndef ADC_ATTEN_DB_12
+#define ADC_ATTEN_DB_12 ADC_ATTEN_DB_11
+#endif
+
+// Hardware versions
+// 0 = LOW, 1 = HIGH, 2 = Hi-Z
+#define HW_V1 (0x00)
+//#define HW_?? (0x01)
+//#define HW_?? (0x02)
+#define HW_V2_0D (0x10)
+#define HW_V2_0C (0x11)
+//#define HW_?? (0x12)
+//#define HW_?? (0x20)
+//#define HW_?? (0x21)
+//#define HW_V1 (0x22)  // NO! Sense pins can't pull-[up|down]. Always detect as LOW.
+
+#define HW_VER_1_PIN 36
+#define HW_VER_0_PIN 39
+uint8_t hardware_version = 0xFF;
+
+// Setup NeoPixel for debugging.
+#define PIXELS_NUM 1
+#define PIXELS_PIN 13
+Adafruit_NeoPixel pixels(PIXELS_NUM, PIXELS_PIN, NEO_GRB + NEO_KHZ400);
+bool first_time = true;
+const uint32_t COLOR_STOPPED = pixels.Color(8, 8, 8);
+const uint32_t COLOR_RX_SQL_CLOSED = pixels.Color(0, 0, 32); // TODO: animate this state? Breath? Option to turn off entirely?
+const uint32_t COLOR_TX = pixels.Color(16, 16, 0);
+const uint32_t COLOR_RX_SQL_OPEN = pixels.Color(0, 32, 0);
+
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Forward Declarations
@@ -128,12 +161,58 @@ void tuneTo(float freqTx, float freqRx, int tone, int squelch, String bandwidth)
 void setMode(int newMode);
 void processTxAudio(uint8_t tempBuffer[], int bytesRead);
 void iir_lowpass_reset();
+uint8_t get_hardware_version();
 
 void setup() {
+  // What version hardware is this?  Useful for setting things up later.
+  hardware_version = get_hardware_version();
+
   // Communication with Android via USB cable
   Serial.setRxBufferSize(USB_BUFFER_SIZE);
   Serial.setTxBufferSize(USB_BUFFER_SIZE);
   Serial.begin(230400);
+
+  // Indicate detected hardware version.
+  pixels.begin();
+  pixels.setPixelColor(0, pixels.Color(32, 0, 0));
+  pixels.show();
+  delay(50);
+  pixels.setPixelColor(0, pixels.Color(0, 32, 0));
+  pixels.show();
+  delay(50);
+  pixels.setPixelColor(0, pixels.Color(0, 0, 32));
+  pixels.show();
+  delay(50);
+  pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+  pixels.show();
+  uint32_t color = 0;
+  switch(hardware_version) {
+    case HW_V1:
+      // v1 hardware doesn't have NeoPixels, but v2.0b does, and also didn't connect the Sense pins. :-)
+      color = pixels.Color(0, 32, 0);
+      SQ_PIN = 32;
+      break;
+    case HW_V2_0C:
+      color = pixels.Color(32, 0, 0);
+      SQ_PIN = 4;
+      break;
+    case HW_V2_0D:
+      color = pixels.Color(0, 0, 32);
+      SQ_PIN = 4;
+      break;
+    default:
+      color = pixels.Color(16, 16, 16);
+  }
+  for (uint8_t ndx = 3; ndx; ndx--) {
+    pixels.setPixelColor(0, color);
+    pixels.show();
+    delay(200);
+    pixels.setPixelColor(0, 0);
+    pixels.show();
+    delay(200);
+  }
+  //Serial.print("Hardware version: 0x");
+  //Serial.println(hardware_version, HEX);
 
   // Configure watch dog timer (WDT), which will reset the system if it gets stuck somehow.
   esp_task_wdt_init(10, true); // Reboot if locked up for a bit
@@ -186,7 +265,12 @@ void setup() {
       }
     }
 
-    result = dra->volume(8);
+    if (hardware_version == HW_V2_0C) {
+      // v2.0c has a lower input ADC range.
+      result = dra->volume(4);
+    } else {
+      result = dra->volume(8);
+    }
     // Serial.println("volume: " + String(result));
     result = dra->filters(false, false, false);
     // Serial.println("filters: " + String(result));
@@ -205,7 +289,12 @@ void initI2SRx() {
 
   // Initialize ADC
   adc1_config_width(ADC_WIDTH_BIT_12);
-  adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_12);
+  if (hardware_version == HW_V2_0C) {
+    // v2.0c has a lower input ADC range.
+    adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_0);
+  } else {
+    adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_12);
+  }
 
   static const i2s_config_t i2sRxConfig = {
       .mode = (i2s_mode_t) (I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN),
@@ -517,6 +606,11 @@ void loop() {
       size_t samplesRead = bytesRead / 2;
 
       bool squelched = (digitalRead(SQ_PIN) == HIGH);
+      if (first_time) {
+        pixels.setPixelColor(0, squelched ? COLOR_RX_SQL_CLOSED : COLOR_RX_SQL_OPEN);
+        pixels.show();
+        // first_time set to false at bottom of loop(), so it can be used elsewhere if needed.
+      }
 
       // Check for squelch status change
       if (squelched != lastSquelched) {
@@ -524,11 +618,14 @@ void loop() {
           // Start fade-out
           fadeCounter = FADE_SAMPLES;
           fadeDirection = -1;
+          pixels.setPixelColor(0, COLOR_RX_SQL_CLOSED);
         } else {
           // Start fade-in
           fadeCounter = FADE_SAMPLES;
           fadeDirection = 1;
+          pixels.setPixelColor(0, COLOR_RX_SQL_OPEN);
         }
+        pixels.show();
       }
       lastSquelched = squelched;
 
@@ -624,6 +721,7 @@ void loop() {
     // Disregard, we don't want to crash. Just pick up at next loop().)
     // Serial.println("Exception in loop(), skipping cycle.");
   }
+  first_time = false;
 }
 
 /**
@@ -685,12 +783,14 @@ void setMode(int newMode) {
     case MODE_STOPPED:
       digitalWrite(LED_PIN, LOW);
       digitalWrite(PTT_PIN, HIGH);
+      pixels.setPixelColor(0, COLOR_STOPPED);
       break;
     case MODE_RX:
       digitalWrite(LED_PIN, LOW);
       digitalWrite(PTT_PIN, HIGH);
       initI2SRx();
       matchedDelimiterTokensRx = 0;
+      pixels.setPixelColor(0, lastSquelched ? COLOR_RX_SQL_CLOSED : COLOR_RX_SQL_OPEN );
       break;
     case MODE_TX:
       txStartTime = micros();
@@ -699,8 +799,10 @@ void setMode(int newMode) {
       initI2STx();
       txCachedAudioBytes = 0;
       isTxCacheSatisfied = false;
+      pixels.setPixelColor(0, COLOR_TX);
       break;
   }
+  pixels.show();
 }
 
 void processTxAudio(uint8_t tempBuffer[], int bytesRead) {
@@ -722,4 +824,53 @@ void processTxAudio(uint8_t tempBuffer[], int bytesRead) {
     totalBytesWritten += bytesWritten;
     bytesToWrite -= bytesWritten;
   } while (bytesToWrite > 0);
+}
+
+uint8_t get_hardware_version() {
+  pinMode(HW_VER_0_PIN, INPUT_PULLDOWN);
+  pinMode(HW_VER_1_PIN, INPUT_PULLDOWN);
+  uint8_t pulled_down_0 = digitalRead(HW_VER_0_PIN);
+  uint8_t pulled_down_1 = digitalRead(HW_VER_1_PIN);
+  pinMode(HW_VER_0_PIN, INPUT_PULLUP);
+  pinMode(HW_VER_1_PIN, INPUT_PULLUP);
+  uint8_t pulled_up_0 = digitalRead(HW_VER_0_PIN);
+  uint8_t pulled_up_1 = digitalRead(HW_VER_1_PIN);
+  pinMode(HW_VER_0_PIN, INPUT);
+  pinMode(HW_VER_1_PIN, INPUT);
+
+  uint8_t hw_ver = 0;
+  // LOW = 0, HIGH = 1, Hi-Z = 2
+  if (pulled_down_0 == pulled_up_0) {
+    // They're the same, not Hi-Z
+    hw_ver = pulled_down_0 == HIGH ? 0x01 : 0x00;
+  } else {
+    // They're different. Hi-Z.  But!  Make sure we haven't gone insane.
+    hw_ver = pulled_down_0 == LOW ? 0x02 : 0x0F;
+  }
+
+  if (pulled_down_1 == pulled_up_1) {
+    hw_ver += pulled_down_1 == HIGH ? 0x10 : 0x00;
+  } else {
+    hw_ver += pulled_down_1 == LOW ? 0x20 : 0xF0;
+  }
+
+  // Error?
+  if (hw_ver & 0x0F == 0x0F || hw_ver & 0xF0 == 0xF0) {
+    // At least one pin was pulled_down = HIGH, pulled_up = LOW. This is Bad(tm).
+    // TODO What do we do on error?  So far all the conditional code will default to
+    // a sane state, and the device will continue to operate, albeit with possibly
+    // terrible audio.  We should report some sort of error to the upstream
+    // software. Not sure how to do this. @SmittyHalibut
+  }
+
+  // Testing.
+  /*
+  hw_ver = 0;
+  hw_ver |= pulled_down_0 == HIGH ? 1 : 0;
+  hw_ver |= pulled_up_0 == HIGH ? 2 : 0;
+  hw_ver |= pulled_down_1 == HIGH ? 4 : 0;
+  hw_ver |= pulled_up_1 == HIGH ? 8 : 0;
+  */
+
+  return hw_ver;
 }
